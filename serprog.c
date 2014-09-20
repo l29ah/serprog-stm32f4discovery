@@ -25,36 +25,11 @@
 #include <libopencm3/usb/cdc.h>
 #include <libopencm3/cm3/scb.h>
 
+#include "serprog.h"
+
 #define SWAP_UINT32(x) (((x) >> 24) | (((x) & 0x00FF0000) >> 8) | (((x) & 0x0000FF00) << 8) | ((x) << 24))
 
-#define ACK 0x06
-#define NAK 0x15
 #define BUS_SPI 0x08
-
-enum {
-	C_NOP = 0,
-	C_VERSION,
-	C_BITMAP,
-	C_NAME,
-	C_SERBUFSIZE,
-	C_BUSTYPES,
-	C_ADDRLINES,
-	C_OPBUFSIZE,
-	C_WRITELEN,
-	C_READ,
-	C_READN,
-	C_INITOPBUF,
-	C_WRITEOPBUF,
-	C_WRITEOPBUFN,
-	C_WRITEOPBUFDELAY,
-	C_EXECOPBUF,
-	C_SYNCNOP,
-	C_READLEN,
-	C_BUSTYPE,
-	C_SPI,
-	C_SPICLK,
-	C_GPIO,
-};
 
 static const struct usb_device_descriptor dev = {
 	.bLength = USB_DT_DEVICE_SIZE,
@@ -235,45 +210,45 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 	int outlen = 0;
 
 	switch (inbuf[0]) {
-		case C_NOP:
-			outbuf[outlen++] = ACK;
+		case S_CMD_NOP:
+			outbuf[outlen++] = S_ACK;
 			break;
-		case C_VERSION:	// Serial Flasher Protocol Specification - version 1
-			outbuf[outlen++] = ACK;
+		case S_CMD_Q_IFACE:	// Serial Flasher Protocol Specification - version 1
+			outbuf[outlen++] = S_ACK;
 			outbuf[outlen++] = 1;
 			outbuf[outlen++] = 0;
 			break;
-		case C_BITMAP:
-			outbuf[outlen++] = ACK;
-			uint32_t bm =	1 << C_NOP |
-					1 << C_VERSION |
-					1 << C_BITMAP |
-					1 << C_NAME |
-					1 << C_BUSTYPES |
-					1 << C_SYNCNOP;
+		case S_CMD_Q_CMDMAP:
+			outbuf[outlen++] = S_ACK;
+			uint32_t bm =	1 << S_CMD_NOP |
+					1 << S_CMD_Q_IFACE |
+					1 << S_CMD_Q_CMDMAP |
+					1 << S_CMD_Q_PGMNAME |
+					1 << S_CMD_Q_BUSTYPE |
+					1 << S_CMD_SYNCNOP;
 			bm = SWAP_UINT32(bm);
 			memcpy(outbuf + outlen, &bm, 4);
 			outlen += 4;
 			memset(outbuf + outlen, 0, 28);
 			outlen += 28;
 			break;
-		case C_NAME:
-			outbuf[outlen++] = ACK;
+		case S_CMD_Q_PGMNAME:
+			outbuf[outlen++] = S_ACK;
 			const char progname[] = "STM32F4DISCOVERY";
 			_Static_assert(sizeof(progname) == 16 + 1, "progname must be a 16 bytes long NULL-padded buffer");
 			memcpy(outbuf + outlen, progname, 16);
 			outlen += 16;
 			break;
-		case C_BUSTYPES:
-			outbuf[outlen++] = ACK;
+		case S_CMD_Q_BUSTYPE:
+			outbuf[outlen++] = S_ACK;
 			outbuf[outlen++] = BUS_SPI;
 			break;
-		case C_SYNCNOP:
-			outbuf[outlen++] = NAK;
-			outbuf[outlen++] = ACK;
+		case S_CMD_SYNCNOP:
+			outbuf[outlen++] = S_NAK;
+			outbuf[outlen++] = S_ACK;
 			break;
 		default:
-			outbuf[outlen++] = NAK;
+			outbuf[outlen++] = S_NAK;
 			break;
 	}
 	while (usbd_ep_write_packet(usbd_dev, 0x82, outbuf, outlen) == 0);
