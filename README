@@ -1,0 +1,1 @@
+This project requires an ARM toolchain and libopencm3. Pull https://github.com/esden/summon-arm-toolchain.git to obtain it easily.
