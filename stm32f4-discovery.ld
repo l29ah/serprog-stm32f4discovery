@@ -1,1 +1,1 @@
-stm32f4-discovery_ram.ld
+stm32f4-discovery_rom.ld

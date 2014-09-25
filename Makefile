@@ -12,7 +12,7 @@ GDB		:= $(PREFIX)-gdb
 FP_FLAGS	?= -mfloat-abi=hard -mfpu=fpv4-sp-d16
 ARCH_FLAGS	= -mthumb -mcpu=cortex-m4 $(FP_FLAGS)
 
-CFLAGS		+= -Os -g -DSTM32F4
+CFLAGS		+= -O0 -ggdb -DSTM32F4
 CFLAGS		+= -Wextra -Wshadow -Wimplicit-function-declaration
 CFLAGS		+= -Wredundant-decls -Wmissing-prototypes -Wstrict-prototypes
 CFLAGS		+= -fno-common -ffunction-sections -fdata-sections
@@ -44,7 +44,7 @@ bin: $(BINARY).bin
 	@#printf "  OBJCOPY $(*).bin\n"
 	$(Q)$(OBJCOPY) -Obinary $(*).elf $(*).bin
 
-%.elf %.map: $(OBJS)
+%.elf %.map: $(OBJS) $(LDSCRIPT)
 	@#printf "  LD      $(*).elf\n"
 	$(Q)$(LD) $(LDFLAGS) $(ARCH_FLAGS) $(OBJS) $(LDLIBS) -o $(*).elf
 

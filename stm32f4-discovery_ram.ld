@@ -23,7 +23,7 @@
 /* Define memory regions. */
 MEMORY
 {
-	ram (rwx) : ORIGIN = 0x20000000, LENGTH = 192K
+	ram (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
 }
 
 /* Include the common ld script. */

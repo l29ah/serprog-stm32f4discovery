@@ -21,15 +21,19 @@
 #include <string.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
+#include <libopencm3/stm32/otg_fs.h>
+#include <libopencm3/stm32/f4/nvic.h>
+#include <libopencm3/stm32/f4/pwr.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
 #include <libopencm3/cm3/scb.h>
+#include <libopencmsis/core_cm3.h>
 
 #include "serprog.h"
 
-#define SWAP_UINT32(x) (((x) >> 24) | (((x) & 0x00FF0000) >> 8) | (((x) & 0x0000FF00) << 8) | ((x) << 24))
-
 #define BUS_SPI 0x08
+
+static usbd_device *usbdd;
 
 static const struct usb_device_descriptor dev = {
 	.bLength = USB_DT_DEVICE_SIZE,
@@ -207,51 +211,70 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 
 	char inbuf[64], outbuf[64];
 	int len = usbd_ep_read_packet(usbd_dev, 0x01, inbuf, 64);
-	int outlen = 0;
+	int outlen, pos = 0;
 
-	switch (inbuf[0]) {
-		case S_CMD_NOP:
-			outbuf[outlen++] = S_ACK;
-			break;
-		case S_CMD_Q_IFACE:	// Serial Flasher Protocol Specification - version 1
-			outbuf[outlen++] = S_ACK;
-			outbuf[outlen++] = 1;
-			outbuf[outlen++] = 0;
-			break;
-		case S_CMD_Q_CMDMAP:
-			outbuf[outlen++] = S_ACK;
-			uint32_t bm =	1 << S_CMD_NOP |
-					1 << S_CMD_Q_IFACE |
-					1 << S_CMD_Q_CMDMAP |
-					1 << S_CMD_Q_PGMNAME |
-					1 << S_CMD_Q_BUSTYPE |
-					1 << S_CMD_SYNCNOP;
-			bm = SWAP_UINT32(bm);
-			memcpy(outbuf + outlen, &bm, 4);
-			outlen += 4;
-			memset(outbuf + outlen, 0, 28);
-			outlen += 28;
-			break;
-		case S_CMD_Q_PGMNAME:
-			outbuf[outlen++] = S_ACK;
-			const char progname[] = "STM32F4DISCOVERY";
-			_Static_assert(sizeof(progname) == 16 + 1, "progname must be a 16 bytes long NULL-padded buffer");
-			memcpy(outbuf + outlen, progname, 16);
-			outlen += 16;
-			break;
-		case S_CMD_Q_BUSTYPE:
-			outbuf[outlen++] = S_ACK;
-			outbuf[outlen++] = BUS_SPI;
-			break;
-		case S_CMD_SYNCNOP:
-			outbuf[outlen++] = S_NAK;
-			outbuf[outlen++] = S_ACK;
-			break;
-		default:
-			outbuf[outlen++] = S_NAK;
-			break;
+	while (pos < len) {
+		outlen = 0;
+		switch (inbuf[pos++]) {
+			case S_CMD_NOP:
+				outbuf[outlen++] = S_ACK;
+				break;
+			case S_CMD_Q_IFACE:	// Serial Flasher Protocol Specification - version 1
+				outbuf[outlen++] = S_ACK;
+				outbuf[outlen++] = 1;
+				outbuf[outlen++] = 0;
+				break;
+			case S_CMD_Q_CMDMAP:
+				outbuf[outlen++] = S_ACK;
+				uint32_t bm =	1 << S_CMD_NOP |
+						1 << S_CMD_Q_IFACE |
+						1 << S_CMD_Q_CMDMAP |
+						1 << S_CMD_Q_PGMNAME |
+						1 << S_CMD_Q_BUSTYPE |
+						1 << S_CMD_SYNCNOP |
+						1 << S_CMD_S_BUSTYPE |
+						1 << S_CMD_O_SPIOP;
+				memcpy(outbuf + outlen, &bm, 4);
+				outlen += 4;
+				memset(outbuf + outlen, 0, 28);
+				outlen += 28;
+				break;
+			case S_CMD_Q_PGMNAME:
+				outbuf[outlen++] = S_ACK;
+				const char progname[] = "STM32F4DISCOVERY";
+				_Static_assert(sizeof(progname) == 16 + 1, "progname must be a 16 bytes long NULL-padded buffer");
+				memcpy(outbuf + outlen, progname, 16);
+				outlen += 16;
+				break;
+			case S_CMD_Q_BUSTYPE:
+				outbuf[outlen++] = S_ACK;
+				outbuf[outlen++] = BUS_SPI;
+				break;
+			case S_CMD_SYNCNOP:
+				outbuf[outlen++] = S_NAK;
+				outbuf[outlen++] = S_ACK;
+				break;
+			case S_CMD_S_BUSTYPE:
+				if (inbuf[pos++] == BUS_SPI) {
+					outbuf[outlen++] = S_ACK;
+				} else {
+					outbuf[outlen++] = S_NAK;
+				}
+				break;
+			case S_CMD_O_SPIOP:
+				outbuf[outlen++] = S_ACK;
+				uint32_t slen = 0, rlen = 0;
+				memcpy(&slen, inbuf + pos, 3);
+				pos += 3;
+				memcpy(&rlen, inbuf + pos, 3);
+				pos += 3;
+				break;
+			default:
+				outbuf[outlen++] = S_NAK;
+				break;
+		}
+		while (usbd_ep_write_packet(usbd_dev, 0x82, outbuf, outlen) == 0);
 	}
-	while (usbd_ep_write_packet(usbd_dev, 0x82, outbuf, outlen) == 0);
 }
 
 static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue)
@@ -270,10 +293,13 @@ static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue)
 				cdcacm_control_request);
 }
 
+void otg_fs_isr(void)
+{
+	usbd_poll(usbdd);
+}
+
 int main(void)
 {
-	usbd_device *usbd_dev;
-
 	rcc_clock_setup_hse_3v3(&hse_8mhz_3v3[CLOCK_3V3_120MHZ]);
 
 	rcc_periph_clock_enable(RCC_GPIOA);
@@ -283,13 +309,33 @@ int main(void)
 			GPIO9 | GPIO11 | GPIO12);
 	gpio_set_af(GPIOA, GPIO_AF10, GPIO9 | GPIO11 | GPIO12);
 
-	usbd_dev = usbd_init(&otgfs_usb_driver, &dev, &config,
+	usbdd = usbd_init(&otgfs_usb_driver, &dev, &config,
 			usb_strings, 3,
 			usbd_control_buffer, sizeof(usbd_control_buffer));
 
-	usbd_register_set_config_callback(usbd_dev, cdcacm_set_config);
+	usbd_register_set_config_callback(usbdd, cdcacm_set_config);
+
+	OTG_FS_GAHBCFG |= OTG_FS_GAHBCFG_GINT;
+	OTG_FS_GINTMSK = OTG_FS_GINTMSK_MMISM |
+			 OTG_FS_GINTMSK_OTGINT |
+			 OTG_FS_GINTMSK_ENUMDNEM |
+			 OTG_FS_GINTMSK_RXFLVLM |
+			 OTG_FS_GINTMSK_IEPINT |
+			 OTG_FS_GINTMSK_USBSUSPM |
+			 OTG_FS_GINTMSK_WUIM |
+			 OTG_FS_GINTMSK_SOFM;
+	OTG_FS_DAINTMSK = 0xF;
+	OTG_FS_DIEPMSK = OTG_FS_DIEPMSK_XFRCM;
+
+	//SCB->VTOR = 0x20000000;
+
+	nvic_set_priority(NVIC_OTG_FS_IRQ, 1);
+	nvic_enable_irq(NVIC_OTG_FS_IRQ);
 
 	while (1) {
-		usbd_poll(usbd_dev);
+		//PWR_CR |= PWR_CR_LPSDSR;
+		//pwr_set_stop_mode();
+		__WFI();
+		//otg_fs_isr();
 	}
 }
